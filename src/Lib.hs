@@ -4,6 +4,7 @@
 module Lib
     ( Spec
     , solveAndPrint
+    , probs
     ) where
 
 import Data.Array
@@ -100,17 +101,18 @@ rowProbs spec perms row =
       where blacks = length . filter (isBlack i spec) $ perms
 
 
+flattenProbs :: [(Int, Int)] -> Row
+flattenProbs = map flatten
+  where
+    flatten (_, 0) = Just Black
+    flatten (0, _) = Just White
+    flatten _ = Nothing
+
+
 -- try to fill each pixel in row if it is Nothing and
 -- all permutations lead to the same color
 fillRow :: Spec -> [Perm] -> Row -> Row
-fillRow spec perms row =
-  map determineColor $ row `zip` [1..]
-  where
-    determineColor (Just p, _) = Just p
-    determineColor (Nothing, i)
-      | all (isBlack i spec) perms = Just Black
-      | all (isWhite i spec) perms = Just White
-      | otherwise = Nothing
+fillRow spec perms = flattenProbs . rowProbs spec perms
 
 
 -- do a row based sweep on the puzzle
@@ -151,9 +153,9 @@ solveStep (specH, specV)
     sweepRows' spec (h, v, puzzle) = (h', v, puzzle')
       where (h', puzzle') = sweepRows spec (h, puzzle)
 
-    -- flip H and V
-    transposePuzzle :: State -> State
-    transposePuzzle (h, v, puzzle) = (v, h, transpose puzzle)
+-- flip H and V
+transposePuzzle :: State -> State
+transposePuzzle (h, v, puzzle) = (v, h, transpose puzzle)
 
 
 solve :: ([Spec], [Spec]) -> State -> State
@@ -165,6 +167,30 @@ solve spec state@(_, _, puzzle) =
       state'
     else
       solve spec state'
+
+
+-- calculate the probability for (black, white) for each pixel
+probs :: ([Spec], [Spec]) -> State -> [[(Int, Int)]]
+probs (specH, specV) state@(rowPermsH, rowPermsV, puzzle) =
+  zipWith (zipWith sumProbs) hProbs vProbs
+  where
+    xProbs spec rowPerms puzzle =
+      map (uncurry3 rowProbs) $ zip3 spec rowPerms puzzle
+    hProbs = xProbs specH rowPermsH puzzle
+    vProbs = transpose (xProbs specV rowPermsV (transpose puzzle))
+
+    sumProbs :: (Int, Int) -> (Int, Int) -> (Int, Int)
+    sumProbs (a, b) (c, d) = (a + b, c + d)
+
+    uncurry3 :: (a -> b -> c -> d) -> ((a, b, c) -> d)
+    uncurry3 f (x,y,z) = f x y z
+
+
+bestProb :: [[(Int, Int)]] -> (Int, Int, Pixel)
+bestProb probs =
+  map scanRow $ probs `zip` [1..]
+  where
+    scanRow (i, row) = undefined
 
 
 solveWithLookahead :: ([Spec], [Spec]) -> Int -> State -> (State, Int)
@@ -318,6 +344,53 @@ test11_specV =
 
 test11_spec = (test11_specH, test11_specV)
 
+test13_specH :: [Spec]
+test13_specH =
+  [ [3,1]
+  , [2,2]
+  , [2,4]
+  , [2,3,1]
+  , [3,8]
+  -- --
+  , [18]
+  , [13,3]
+  , [13]
+  , [13]
+  , [12,1]
+  -- --
+  , [4,2,3]
+  , [3,2,2,2,2]
+  , [3,2,2,3,1]
+  , [2,1,2,2,4]
+  , [3,2,2,2]
+  ]
+
+test13_specV :: [Spec]
+test13_specV =
+  [ [4]
+  , [9,3]
+  , [2,11]
+  , [1,8,1]
+  , [1,7]
+  -- --
+  , [6,2]
+  , [5,4]
+  , [5,1,1]
+  , [5]
+  , [5]
+  -- --
+  , [9]
+  , [11]
+  , [8,2]
+  , [8,1]
+  , [6,3]
+  -- --
+  , [1,3,3]
+  , [4,2]
+  , [3,4]
+  , [1,2]
+  , [2]
+  ]
 
 test :: IO ()
 test =
