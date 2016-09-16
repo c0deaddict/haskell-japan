@@ -1,14 +1,18 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 
 module Lib
     ( Spec
+    , Perm
+    , minLength
+    , perms
+    , isBlack
+    , isWhite
     , solveAndPrint
     , probs
     ) where
 
-import Data.Array
-import Data.List
+import           Data.List
+import           Data.Ratio
 
 data Pixel = Black | White deriving (Eq)
 type Row = [Maybe Pixel]
@@ -17,12 +21,14 @@ type Spec = [Int]
 type Perm = [Int]
 type RowPerms = [[Perm]]
 type State = (RowPerms, RowPerms, Puzzle)
+type Pos = (Int, Int)
+type Prob = (Int, Int)
 
 instance Show Pixel where
   show Black = "##"
   show White = ".."
 
-instance Show Row where
+instance {-# OVERLAPPING #-} Show Row where
   show = concatMap showPixel
     where
       showPixel (Just p) = show p
@@ -83,17 +89,18 @@ isWhite i spec perm = not (isBlack i spec perm)
 -- filter out permutations that can't be applied anymore
 filterPerms :: Spec -> [Perm] -> Row -> [Perm]
 filterPerms spec perms row =
-  foldr filterPixel perms $ row `zip` [1..]
+  if not (null perms') then perms' else perms
   where
+    perms' = foldr filterPixel perms $ row `zip` [1..]
     filterPixel (Just Black, i) p = filter (isBlack i spec) p
     filterPixel (Just White, i) p = filter (isWhite i spec) p
     filterPixel (Nothing, _) p = p
 
 
 -- calculate probabilities for black/white for a row
-rowProbs :: Spec -> [Perm] -> Row -> [(Int, Int)]
+rowProbs :: Spec -> [Perm] -> Row -> [Prob]
 rowProbs spec perms row =
-  map determineProbs $ row `zip` [1..]
+  zipWith (curry determineProbs) row [1..]
   where
     determineProbs (Just Black, _) = (1, 0)
     determineProbs (Just White, _) = (0, 1)
@@ -101,7 +108,7 @@ rowProbs spec perms row =
       where blacks = length . filter (isBlack i spec) $ perms
 
 
-flattenProbs :: [(Int, Int)] -> Row
+flattenProbs :: [Prob] -> Row
 flattenProbs = map flatten
   where
     flatten (_, 0) = Just Black
@@ -153,6 +160,7 @@ solveStep (specH, specV)
     sweepRows' spec (h, v, puzzle) = (h', v, puzzle')
       where (h', puzzle') = sweepRows spec (h, puzzle)
 
+
 -- flip H and V
 transposePuzzle :: State -> State
 transposePuzzle (h, v, puzzle) = (v, h, transpose puzzle)
@@ -186,27 +194,66 @@ probs (specH, specV) state@(rowPermsH, rowPermsV, puzzle) =
     uncurry3 f (x,y,z) = f x y z
 
 
-bestProb :: [[(Int, Int)]] -> (Int, Int, Pixel)
+probsToRatio :: [[Prob]] -> [[Ratio Int]]
+probsToRatio = map (map (\(a, b) -> a % b))
+
+
+-- lookup the best probability (except the determined ones) in the puzzle
+bestProb :: [[Prob]] -> (Pos, Prob)
 bestProb probs =
-  map scanRow $ probs `zip` [1..]
+  maximumBy maxProb $ map bestInRow $ probs `zip` [1..]
   where
-    scanRow (i, row) = undefined
+    bestInRow :: ([Prob], Int) -> (Pos, Prob)
+    bestInRow (row, j) =
+      let (prob, i) = maximumBy maxProb $ row `zip` [1..]
+      in ((i, j), prob)
+
+    probRatio :: Prob -> Ratio Int
+    probRatio (b, w)
+      | b > w = b % (b + w)
+      | otherwise = w % (b + w)
+
+    maxProb (a, _) (b, _) = maxProb' (probRatio a) (probRatio b)
+    maxProb' a b
+      | a == 1 = LT -- a is determined, pick b
+      | b == 1 = GT -- b is determined, pick a
+      | otherwise = a `compare` b
 
 
-solveWithLookahead :: ([Spec], [Spec]) -> Int -> State -> (State, Int)
+replaceAtIndex :: Int -> a -> [a] -> [a]
+replaceAtIndex i e lst = take i lst ++ [e] ++ drop (i + 1) lst
+
+
+setPixel :: Puzzle -> Pos -> Pixel -> Puzzle
+setPixel puzzle (i, j) pixel =
+  replaceAtIndex (j - 1) newRow puzzle
+  where
+    oldRow = puzzle !! (j - 1)
+    newRow = replaceAtIndex (i - 1) (Just pixel) oldRow
+
+
+solveWithLookahead :: ([Spec], [Spec]) -> Int -> State -> (Bool, State, Int)
 solveWithLookahead spec lookahead state =
   let
     state'@(h, v, puzzle) = solve spec state
+    solved = isSolved puzzle
   in
-    if isSolved puzzle || lookahead <= 0 then
-      (state, lookahead)
+    if solved || lookahead <= 0 then
+      (False, state, lookahead)
     else
-      -- look for a spec with the least permutations
-      -- try each one and see if only one leads to a valid state
-      solveWithLookahead spec (lookahead - 1) state
-      where
-        rowPermsWithLength r = [1..] `zip` map (\p -> (length p, p)) r
-        leastPerms r = minimumBy (\a b -> compare (snd a) (snd b)) $ rowPermsWithLength r
+      let
+        (pos, (b, w)) = bestProb (probs spec state')
+        setPixel' = setPixel puzzle pos
+        puzzleBlack = setPixel' Black
+        puzzleWhite = setPixel' White
+        (puzzleA, puzzleB)
+          | b > w = (puzzleBlack, puzzleWhite)
+          | otherwise = (puzzleWhite, puzzleBlack)
+        solve' p = solveWithLookahead spec (lookahead - 1) (h, v, p)
+        resA@(solvedA, _, _) = solve' puzzleA
+        resB = solve' puzzleB
+      in
+        if solvedA then resA else resB
 
 
 isSolved :: Puzzle -> Bool
@@ -391,6 +438,8 @@ test13_specV =
   , [1,2]
   , [2]
   ]
+
+test13_spec = (test13_specH, test13_specV)
 
 test :: IO ()
 test =
